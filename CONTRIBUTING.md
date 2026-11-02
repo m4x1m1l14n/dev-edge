@@ -13,10 +13,12 @@ Docker flavour?) and pull requests are all welcome.
 
 ## Development
 
+Clone the repository and point the `dev-edge` on your `PATH` at this checkout:
+
 ```bash
 git clone https://github.com/m4x1m1l14n/dev-edge.git
 cd dev-edge
-bin/dev-edge install     # points the dev-edge on your PATH at this checkout
+bin/dev-edge install
 ```
 
 Before opening a pull request:

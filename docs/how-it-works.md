@@ -5,7 +5,7 @@ the HTTP and HTTPS ports for the whole machine and routes requests by host name 
 any project. The `dev-edge` CLI is a thin Bash wrapper that starts it, issues certificates and
 connects it to project networks.
 
-```
+```text
 browser ── https://app.main.shop.localhost ──▶ dev-edge (Traefik on 127.0.0.1:443)
                                                   │ attached to each project's own network
                                 ┌─────────────────┼────────────────────┐

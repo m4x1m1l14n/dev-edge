@@ -34,15 +34,16 @@ Full documentation: `"$(dev-edge home)/README.md"` and `"$(dev-edge home)/docs/"
 
 ## Commands
 
-```bash
-dev-edge doctor                       # is the machine set up? run first when anything fails
-dev-edge status                       # ports, attached networks, certificates
-dev-edge url app.main.shop.localhost  # the URL to open, with the port if not 443
-dev-edge cert shop-main '*.main.shop.localhost'
-dev-edge attach shop-main | dev-edge detach shop-main
-dev-edge cert-rm shop-feature-x       # after a stack is gone for good
-dev-edge logs --tail 50               # Traefik errors (bad labels, file-provider YAML)
-```
+| Command | Use |
+|---|---|
+| `dev-edge doctor` | Is the machine set up? Run it first when anything fails |
+| `dev-edge status` | Ports, attached networks, certificates |
+| `dev-edge url app.main.shop.localhost` | The URL to open, with the port when it is not 443 |
+| `dev-edge cert shop-main '*.main.shop.localhost'` | Issue or refresh a stack's certificate (idempotent) |
+| `dev-edge attach shop-main` | Connect the edge to a stack's network, after `docker compose up` |
+| `dev-edge detach shop-main` | Disconnect it, before `docker compose down` |
+| `dev-edge cert-rm shop-feature-x` | Delete a certificate once its stack is gone for good |
+| `dev-edge logs --tail 50` | Traefik errors (bad labels, file-provider YAML) |
 
 The Traefik dashboard (`dev-edge url traefik.localhost /dashboard/`) lists every router and the
 network it uses.

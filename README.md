@@ -6,7 +6,7 @@
 **Trusted local HTTPS for every Docker project on your machine, on readable names, with as many
 copies of each project running side by side as you need.**
 
-```
+```text
 https://app.main.shop.localhost          project "shop", stack "main"
 https://api.main.shop.localhost
 https://app.feature-login.shop.localhost  a second copy of "shop", e.g. from a git worktree
@@ -42,35 +42,75 @@ service workers, HTTP/2 and `wss://` behave as they do in production.
 
 ## Quick start
 
-Requirements: Docker with Compose v2, `mkcert`, `openssl`, `python3` (see
-[platform support](#platform-support)).
+### 1. Install the requirements
+
+You need Docker with Compose v2, `mkcert`, `openssl` and `python3` (see
+[platform support](#platform-support)). mkcert and the Firefox trust tools come from your package
+manager.
+
+macOS:
 
 ```bash
-# macOS
 brew install mkcert nss
+```
 
-# Debian / Ubuntu
+Debian / Ubuntu:
+
+```bash
 sudo apt install mkcert libnss3-tools
 ```
 
-Install dev-edge (any folder works; the CLI is symlinked from there, so keep it in place):
+### 2. Install dev-edge
+
+Clone the repository. Any folder works, but keep it in place afterwards: the CLI is linked from
+there.
 
 ```bash
 git clone https://github.com/m4x1m1l14n/dev-edge.git ~/.local/share/dev-edge
-~/.local/share/dev-edge/bin/dev-edge install   # symlinks the CLI into ~/.local/bin (must be on PATH)
-dev-edge init                                  # creates the config and trusts the local CA (asks for your password once)
+```
+
+Link the CLI into `~/.local/bin`, which must be on your `PATH`:
+
+```bash
+~/.local/share/dev-edge/bin/dev-edge install
+```
+
+Create the configuration and trust the local certificate authority. mkcert asks for your password
+once.
+
+```bash
+dev-edge init
+```
+
+Start the edge and check that everything is in order:
+
+```bash
 dev-edge up
 dev-edge doctor
 ```
 
-Try it with the bundled demo, two copies side by side:
+### 3. Try the demo
+
+The bundled demo runs two copies of the same project side by side. Start the `main` stack and a
+`feature-x` stack:
 
 ```bash
 cd "$(dev-edge home)/examples/demo"
-./dev.sh up                    # https://web.main.demo.localhost, https://api.main.demo.localhost
-STACK=feature-x ./dev.sh up    # https://web.feature-x.demo.localhost, https://api.feature-x.demo.localhost
-curl https://api.feature-x.demo.localhost     # trusted, no -k
+./dev.sh up
+STACK=feature-x ./dev.sh up
+```
 
+Each stack prints its URLs, for example `https://web.main.demo.localhost` and
+`https://api.feature-x.demo.localhost`. They answer with a trusted certificate, so `curl` needs no
+`-k`:
+
+```bash
+curl https://api.feature-x.demo.localhost
+```
+
+Stop both stacks:
+
+```bash
 STACK=feature-x ./dev.sh down
 ./dev.sh down
 ```
@@ -81,7 +121,7 @@ STACK=feature-x ./dev.sh down
 
 ## How it works
 
-```
+```text
 browser ── https://app.main.shop.localhost ──▶ dev-edge (Traefik on 127.0.0.1:443)
                                                   │ attached to each project's own network
                                 ┌─────────────────┼────────────────────┐
@@ -124,16 +164,21 @@ services:
       - traefik.http.services.shop-${STACK:-main}-app.loadbalancer.server.port=3000
 ```
 
-And the start/stop order in whatever script the project uses:
+Then follow this order in whatever script the project uses. To start, issue the certificate,
+start the containers and attach the edge to the project network:
 
 ```bash
-# start
 dev-edge cert shop-main '*.main.shop.localhost'
 docker compose up -d
 dev-edge attach shop-main
-dev-edge url app.main.shop.localhost     # → https://app.main.shop.localhost
+```
 
-# stop: detach first, or Docker refuses to remove the network
+The app is now at `https://app.main.shop.localhost`. `dev-edge url app.main.shop.localhost`
+prints that address, including the port when the edge does not run on 443.
+
+To stop, detach first. Docker refuses to remove a network the edge is still connected to.
+
+```bash
 dev-edge detach shop-main
 docker compose down
 ```
@@ -148,10 +193,22 @@ databases, websockets and services running outside Docker, is in
 A *stack* is one running copy of a project. Pick its name with the `STACK` variable and everything
 derives from it: the compose project, the network, the host names and the certificate.
 
+Your everyday instance:
+
 ```bash
-STACK=main ./dev.sh up                              # your everyday instance
-STACK=review-142 ./dev.sh up                        # a colleague's branch, at the same time
-STACK=$(git branch --show-current) ./dev.sh up      # one stack per branch or git worktree
+STACK=main ./dev.sh up
+```
+
+A colleague's branch, running at the same time:
+
+```bash
+STACK=review-142 ./dev.sh up
+```
+
+One stack per branch or git worktree:
+
+```bash
+STACK=$(git branch --show-current) ./dev.sh up
 ```
 
 This is what makes dev-edge work well with coding agents running in parallel worktrees: each one
@@ -167,10 +224,10 @@ Copy-paste prompts for Claude Code, Codex, Cursor or any other coding agent:
 | [prompts/setup-project.md](prompts/setup-project.md) | inside a project, to put it behind dev-edge |
 
 For day-to-day work, give your agent the [dev-edge skill](skills/dev-edge/SKILL.md) so it knows how
-to start stacks, build URLs and debug routing in any project that uses dev-edge:
+to start stacks, build URLs and debug routing in any project that uses dev-edge. For Claude Code,
+link it once for all projects:
 
 ```bash
-# Claude Code, all projects
 mkdir -p ~/.claude/skills && ln -s "$(dev-edge home)/skills/dev-edge" ~/.claude/skills/dev-edge
 ```
 
@@ -217,14 +274,30 @@ Browsers: Chrome, Edge, Safari and Firefox (Firefox needs `nss` installed **befo
 
 ## Update and uninstall
 
+To update, pull the latest version and recreate the edge. Attached networks are re-attached
+automatically.
+
 ```bash
 git -C "$(dev-edge home)" pull && dev-edge restart
 ```
 
+To uninstall, stop the edge and remove the CLI link:
+
 ```bash
-dev-edge uninstall              # stops the edge, removes the symlink
-rm -rf ~/.config/dev-edge       # certificates and config
-mkcert -uninstall               # stop trusting the local CA (shared with anything else using mkcert)
+dev-edge uninstall
+```
+
+Delete the certificates and configuration:
+
+```bash
+rm -rf ~/.config/dev-edge
+```
+
+Optionally, stop trusting the local certificate authority. Other tools that use mkcert on this
+machine share it, so skip this step if you still need them.
+
+```bash
+mkcert -uninstall
 ```
 
 ## Troubleshooting

@@ -46,11 +46,11 @@ anything that needs `sudo`, a password, or changes outside the folders named her
    Every check must say `ok`. If one fails, use `docs/troubleshooting.md` in the repository to fix
    it and explain what you changed.
 
-7. **Smoke test** with the bundled demo, then clean up:
+7. **Smoke test** with the bundled demo (`curl` must succeed without `-k`), then clean up:
    ```bash
    cd "$(dev-edge home)/examples/demo"
    ./dev.sh up
-   curl -sS "$(dev-edge url api.main.demo.localhost)" | head -3      # no -k
+   curl -sS "$(dev-edge url api.main.demo.localhost)" | head -3
    ./dev.sh down
    dev-edge cert-rm demo-main
    ```

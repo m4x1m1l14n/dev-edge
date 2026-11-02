@@ -68,16 +68,21 @@ Rules:
 
 ## 3. Start and stop scripts
 
-Order matters:
+Order matters. To start, issue the certificate, start the containers, then attach the edge:
 
 ```bash
-# start
-dev-edge cert shop-main '*.main.shop.localhost'   # idempotent, instant after the first time
+dev-edge cert shop-main '*.main.shop.localhost'
 docker compose up -d
-dev-edge attach shop-main                          # also starts the edge if needed
+dev-edge attach shop-main
+```
 
-# stop
-dev-edge detach shop-main                          # before down, or the network cannot be removed
+`dev-edge cert` is idempotent and instant after the first run, and `dev-edge attach` starts the
+edge if it is not running, so scripts can call both on every start.
+
+To stop, detach before taking the stack down, or Docker cannot remove the network:
+
+```bash
+dev-edge detach shop-main
 docker compose down
 ```
 
@@ -86,11 +91,12 @@ starting point for a project's `dev.sh`, Makefile target or npm script. When a s
 good (a merged branch), `dev-edge cert-rm shop-<stack>` deletes its certificate.
 
 **Never hard-code ports in URLs.** Someone else may run the edge on 8443. Build URLs with
-`dev-edge url <host> [path]` in scripts, and in config read the port once:
+`dev-edge url <host> [path]` in scripts. `dev-edge port https` prints the HTTPS port (443 by
+default), and `dev-edge url` the full address, with the port only when it is not 443:
 
 ```bash
-EDGE_HTTPS_PORT=$(dev-edge port https)          # 443 by default
-APP_URL=$(dev-edge url app.main.shop.localhost)  # https://app.main.shop.localhost[:port]
+EDGE_HTTPS_PORT=$(dev-edge port https)
+APP_URL=$(dev-edge url app.main.shop.localhost)
 ```
 
 ## 4. Multiple stacks
@@ -101,13 +107,15 @@ Everything above derives from `STACK`, so a second copy is one variable away:
 STACK=feature-login ./dev.sh up
 ```
 
-Common ways to pick the name:
+Common ways to pick the name in a script. One stack per git branch, sanitised into a DNS label:
 
 ```bash
-# per git branch or worktree, sanitised into a DNS label
 STACK=$(git branch --show-current | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | cut -c1-40 | sed 's/^-*//; s/-*$//')
+```
 
-# per worktree folder
+One stack per worktree folder:
+
+```bash
 STACK=$(basename "$(git rev-parse --show-toplevel)")
 ```
 
@@ -164,13 +172,14 @@ Websockets pass through the edge without extra configuration.
 
 The edge routes HTTP(S) only. For a database or cache you want to reach from a desktop client:
 
-- publish it on loopback with a **random** host port so stacks do not collide, and look it up:
+- publish it on loopback with a **random** host port so stacks do not collide:
   ```yaml
   db:
     ports: ["127.0.0.1::5432"]
   ```
+  Docker picks a free port; this prints it, for example `127.0.0.1:55021`:
   ```bash
-  docker compose port db 5432     # → 127.0.0.1:55021
+  docker compose port db 5432
   ```
 - or skip the port entirely and use `docker compose exec db psql`.
 
@@ -192,9 +201,17 @@ public URL (Playwright or OAuth flows inside a container), see
 
 ## 9. Verify
 
+`dev-edge status` must list the stack's network and certificate:
+
 ```bash
-dev-edge status                                                       # network and certificate listed
-curl -sS -o /dev/null -w '%{http_code}\n' "$(dev-edge url app.main.shop.localhost)"   # no -k
+dev-edge status
+```
+
+Every host must answer with a trusted certificate. Use `curl` without `-k`, and expect a `200`
+(or the redirect your app normally sends):
+
+```bash
+curl -sS -o /dev/null -w '%{http_code}\n' "$(dev-edge url app.main.shop.localhost)"
 ```
 
 Then open the URL in a browser: a padlock with a trusted certificate, no console errors, API calls
@@ -203,14 +220,28 @@ detach/attach order is right.
 
 ## 10. Document it
 
-Add a short section to the project README so teammates know:
+Add a short section to the project README so teammates know how to run it:
 
-```markdown
+````markdown
 ## Local development
 
-Requires [dev-edge](https://github.com/m4x1m1l14n/dev-edge) (`dev-edge doctor` must pass).
+Requires [dev-edge](https://github.com/m4x1m1l14n/dev-edge); `dev-edge doctor` must pass.
 
-    ./dev.sh up                    # https://app.main.shop.localhost
-    STACK=my-branch ./dev.sh up    # a second copy at https://app.my-branch.shop.localhost
-    ./dev.sh down
+Start the app at https://app.main.shop.localhost:
+
+```bash
+./dev.sh up
 ```
+
+Start a second copy at https://app.my-branch.shop.localhost:
+
+```bash
+STACK=my-branch ./dev.sh up
+```
+
+Stop it:
+
+```bash
+./dev.sh down
+```
+````
