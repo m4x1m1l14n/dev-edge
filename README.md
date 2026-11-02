@@ -121,14 +121,32 @@ STACK=feature-x ./dev.sh down
 
 ## How it works
 
-```text
-browser ── https://app.main.shop.localhost ──▶ dev-edge (Traefik on 127.0.0.1:443)
-                                                  │ attached to each project's own network
-                                ┌─────────────────┼────────────────────┐
-                                ▼                 ▼                    ▼
-                       shop-main network   shop-feature-login     blog-main network
-                         app, api, db        app, api, db            app, db
+```mermaid
+flowchart TB
+    client["Browser, curl, Playwright"]
+    edge["<b>dev-edge</b><br/>Traefik on 127.0.0.1:443 and [::1]:443<br/>TLS with mkcert certificates"]
+    client -- "HTTPS to app.main.shop.localhost<br/>(*.localhost resolves to loopback)" --> edge
+
+    subgraph shopMain ["shop-main"]
+        direction LR
+        app1[app] ~~~ api1[api] ~~~ db1[(db)]
+    end
+    subgraph shopFeature ["shop-feature-login"]
+        direction LR
+        app2[app] ~~~ api2[api] ~~~ db2[(db)]
+    end
+    subgraph blogMain ["blog-main"]
+        direction LR
+        app3[app] ~~~ db3[(db)]
+    end
+
+    edge -- "plain HTTP" --> shopMain
+    edge --> shopFeature
+    edge --> blogMain
 ```
+
+Each box is one project's own Docker network. The edge is attached to all of them; the projects
+cannot reach each other.
 
 1. **Names:** `*.localhost` is reserved for the local machine (RFC 6761). Browsers, and on current
    macOS and systemd Linux the whole OS, resolve it to loopback. No DNS server, no hosts file.

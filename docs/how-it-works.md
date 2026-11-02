@@ -5,14 +5,52 @@ the HTTP and HTTPS ports for the whole machine and routes requests by host name 
 any project. The `dev-edge` CLI is a thin Bash wrapper that starts it, issues certificates and
 connects it to project networks.
 
-```text
-browser ── https://app.main.shop.localhost ──▶ dev-edge (Traefik on 127.0.0.1:443)
-                                                  │ attached to each project's own network
-                                ┌─────────────────┼────────────────────┐
-                                ▼                 ▼                    ▼
-                       shop-main network   shop-feature-login     blog-main network
-                         app, api, db        app, api, db            app, db
+```mermaid
+flowchart TB
+    client["Browser, curl, Playwright"]
+    edge["<b>dev-edge</b><br/>Traefik on 127.0.0.1:443 and [::1]:443<br/>TLS with mkcert certificates"]
+    client -- "HTTPS to app.main.shop.localhost<br/>(*.localhost resolves to loopback)" --> edge
+
+    subgraph shopMain ["shop-main"]
+        direction LR
+        app1[app] ~~~ api1[api] ~~~ db1[(db)]
+    end
+    subgraph shopFeature ["shop-feature-login"]
+        direction LR
+        app2[app] ~~~ api2[api] ~~~ db2[(db)]
+    end
+    subgraph blogMain ["blog-main"]
+        direction LR
+        app3[app] ~~~ db3[(db)]
+    end
+
+    edge -- "plain HTTP" --> shopMain
+    edge --> shopFeature
+    edge --> blogMain
 ```
+
+Each box is one project's own Docker network. The edge is attached to all of them; the projects
+cannot reach each other.
+
+## A request, step by step
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant B as Browser
+    participant E as dev-edge (Traefik)
+    participant A as app container
+    B->>B: Resolve app.main.shop.localhost to 127.0.0.1
+    B->>E: TLS handshake, SNI app.main.shop.localhost
+    E-->>B: Certificate *.main.shop.localhost, signed by the local mkcert CA
+    B->>E: GET / over HTTPS
+    E->>E: Match the router for Host app.main.shop.localhost
+    E->>A: GET / over plain HTTP on network shop-main, with X-Forwarded-Proto https
+    A-->>E: 200 OK
+    E-->>B: 200 OK over HTTPS
+```
+
+The sections below explain each step.
 
 ## 1. Name resolution: `*.localhost`
 
