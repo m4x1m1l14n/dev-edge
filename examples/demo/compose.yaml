@@ -1,0 +1,30 @@
+# A two-service demo you can run as many times side by side as you like, one stack per name:
+#
+#   ./dev.sh up                   https://web.main.demo.localhost  https://api.main.demo.localhost
+#   STACK=feature-x ./dev.sh up   https://web.feature-x.demo.localhost  …
+#
+# Everything a real project needs is here: a stable network name per stack, no published ports,
+# and Traefik labels whose router and service names are unique across the machine.
+
+name: demo-${STACK:-main}
+
+networks:
+  default:
+    name: demo-${STACK:-main}
+
+services:
+  web:
+    image: traefik/whoami:v1.11.0
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.demo-${STACK:-main}-web.rule=Host(`web.${STACK:-main}.demo.localhost`)
+      - traefik.http.services.demo-${STACK:-main}-web.loadbalancer.server.port=80
+
+  api:
+    image: traefik/whoami:v1.11.0
+    environment:
+      WHOAMI_NAME: api
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.demo-${STACK:-main}-api.rule=Host(`api.${STACK:-main}.demo.localhost`)
+      - traefik.http.services.demo-${STACK:-main}-api.loadbalancer.server.port=80

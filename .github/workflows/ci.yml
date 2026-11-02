@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: shellcheck
+        run: shellcheck bin/dev-edge examples/demo/dev.sh
+
+  bash-3:
+    # macOS ships Bash 3.2; the CLI must keep working with it.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: /bin/bash -n bin/dev-edge
+      - run: /bin/bash bin/dev-edge help
+      - run: /bin/bash bin/dev-edge version
+
+  e2e:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install mkcert
+        run: sudo apt-get update && sudo apt-get install -y mkcert libnss3-tools
+
+      - name: Install dev-edge
+        run: |
+          bin/dev-edge install
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Init, start, doctor
+        run: |
+          dev-edge init
+          dev-edge up
+          dev-edge doctor
+
+      - name: Two stacks side by side, trusted HTTPS
+        run: |
+          examples/demo/dev.sh up
+          STACK=feature-x examples/demo/dev.sh up
+          for h in web.main api.main web.feature-x api.feature-x; do
+            curl -fsS --retry 10 --retry-delay 1 --retry-all-errors "$(dev-edge url "$h.demo.localhost")" | grep Hostname
+          done
+
+      - name: Restart re-attaches networks
+        run: |
+          dev-edge restart
+          curl -fsS --retry 10 --retry-delay 1 --retry-all-errors "$(dev-edge url api.feature-x.demo.localhost)" | grep Hostname
+
+      - name: Change ports
+        run: |
+          dev-edge ports 8080 8443
+          test "$(dev-edge url web.main.demo.localhost)" = "https://web.main.demo.localhost:8443"
+          curl -fsS --retry 10 --retry-delay 1 --retry-all-errors "$(dev-edge url web.main.demo.localhost)" | grep Hostname
+          location=$(curl -sS -o /dev/null -w '%{redirect_url}' http://web.main.demo.localhost:8080/)
+          test "$location" = "https://web.main.demo.localhost:8443/"
+
+      - name: Tear down
+        run: |
+          STACK=feature-x examples/demo/dev.sh down
+          examples/demo/dev.sh down
+          dev-edge status
+          dev-edge uninstall
+
+      - name: Diagnostics
+        if: failure()
+        run: |
+          dev-edge status || true
+          docker logs dev-edge || true

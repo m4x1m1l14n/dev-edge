@@ -1,0 +1,33 @@
+name: Bug report
+description: Something does not work as documented
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you ran, what you expected, and what you got instead (exact error text helps).
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Diagnostics
+      description: Output of `dev-edge version`, `dev-edge doctor` and `dev-edge status`.
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      description: OS and version, Docker flavour and version (Docker Desktop, OrbStack, Colima, Docker Engine, rootless…), browser if relevant.
+      placeholder: macOS 26.1, Docker Desktop 4.50, Chrome 142
+    validations:
+      required: true
+  - type: textarea
+    id: compose
+    attributes:
+      label: Relevant compose labels
+      description: The labels and network section of the service that misbehaves, if any. Remove anything private.
+      render: yaml

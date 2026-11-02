@@ -1,0 +1,327 @@
+#!/usr/bin/env bash
+# dev-edge: trusted local HTTPS for every Docker project on this machine.
+# Run `dev-edge help` for the commands; see README.md for how it works.
+set -euo pipefail
+
+version=0.1.0
+self=$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "${BASH_SOURCE[0]}")
+repo=$(cd "$(dirname "$self")/.." && pwd)
+state=${DEV_EDGE_STATE:-${XDG_CONFIG_HOME:-$HOME/.config}/dev-edge}
+config="$state/config.env"
+container=dev-edge
+
+die() { echo "dev-edge: $*" >&2; exit 1; }
+info() { echo "dev-edge: $*" >&2; }
+
+load_config() {
+  EDGE_HTTP_PORT=80
+  EDGE_HTTPS_PORT=443
+  # shellcheck disable=SC1090
+  [ -f "$config" ] && . "$config"
+  export EDGE_HTTP_PORT EDGE_HTTPS_PORT DEV_EDGE_STATE="$state"
+}
+
+compose() {
+  load_config
+  docker compose -p dev-edge -f "$repo/compose.yaml" "$@"
+}
+
+running() {
+  [ "$(docker inspect -f '{{.State.Running}}' "$container" 2>/dev/null)" = "true" ]
+}
+
+port_in_use() {
+  if command -v lsof >/dev/null; then
+    lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1
+  elif command -v ss >/dev/null; then
+    [ -n "$(ss -Hltn "sport = :$1" 2>/dev/null)" ]
+  else
+    return 1 # cannot tell; `docker compose up` reports a taken port anyway
+  fi
+}
+
+need_mkcert() {
+  command -v mkcert >/dev/null || die "mkcert is not installed (macOS: brew install mkcert nss; Linux: see README)"
+}
+
+ca_trusted() {
+  local ca
+  ca="$(mkcert -CAROOT)/rootCA.pem"
+  [ -f "$ca" ] || return 1
+  case "$(uname -s)" in
+    Darwin)
+      local fp
+      fp=$(openssl x509 -in "$ca" -noout -fingerprint -sha1 | cut -d= -f2 | tr -d :)
+      security find-certificate -a -Z /Library/Keychains/System.keychain 2>/dev/null | grep -qi "$fp" \
+        || security find-certificate -a -Z "$HOME/Library/Keychains/login.keychain-db" 2>/dev/null | grep -qi "$fp"
+      ;;
+    Linux)
+      # mkcert -install copies rootCA.pem into the distribution's trust anchors folder.
+      local f
+      for f in /usr/local/share/ca-certificates/mkcert_* /etc/pki/ca-trust/source/anchors/mkcert_* \
+        /etc/ca-certificates/trust-source/anchors/mkcert_* /usr/share/pki/trust/anchors/mkcert_*; do
+        [ -f "$f" ] && cmp -s "$f" "$ca" && return 0
+      done
+      return 1
+      ;;
+    *) return 0 ;; # unknown platform: trust mkcert -install
+  esac
+}
+
+write_tls_config() {
+  local name=$1
+  cat > "$state/dynamic/tls-$name.yml" <<EOF
+# Managed by dev-edge (cert $name). Do not edit.
+tls:
+  certificates:
+    - certFile: /etc/dev-edge/certs/$name.pem
+      keyFile: /etc/dev-edge/certs/$name-key.pem
+EOF
+}
+
+cmd_init() {
+  local http=${1:-} https=${2:-}
+  need_mkcert
+  mkdir -p "$state/certs" "$state/dynamic"
+  chmod 700 "$state" "$state/certs"
+  if [ ! -f "$config" ] || [ -n "$http$https" ]; then
+    load_config
+    http=${http:-$EDGE_HTTP_PORT}
+    https=${https:-$EDGE_HTTPS_PORT}
+    printf 'EDGE_HTTP_PORT=%s\nEDGE_HTTPS_PORT=%s\n' "$http" "$https" > "$config"
+    info "ports: http $http, https $https ($config)"
+  fi
+  if ! ca_trusted; then
+    info "installing the mkcert local CA into the system trust store (asks for your password once)"
+    mkcert -install
+  fi
+  cmd_cert dev-edge traefik.localhost >/dev/null
+  running || info "ready; start it with: dev-edge up"
+}
+
+cmd_up() {
+  [ -f "$config" ] || cmd_init
+  load_config
+  if running; then
+    return 0
+  fi
+  for p in "$EDGE_HTTP_PORT" "$EDGE_HTTPS_PORT"; do
+    if port_in_use "$p"; then
+      die "port $p is already in use; pick free ports: dev-edge ports <http> <https>"
+    fi
+  done
+  ca_trusted || info "warning: the mkcert CA is not trusted yet, browsers will warn; run: dev-edge init"
+  local out
+  out=$(compose up -d --remove-orphans 2>&1) || { echo "$out" >&2; die "could not start the edge"; }
+  info "running on https://*.localhost$(port_suffix) (dashboard: $(cmd_url traefik.localhost))"
+}
+
+cmd_down() {
+  compose down
+}
+
+cmd_restart() {
+  # Networks attached before the restart are lost with the container; re-attach the ones that
+  # still exist and forget the rest.
+  local nets n
+  nets=$(cat "$state/attached" 2>/dev/null || true)
+  compose down >/dev/null 2>&1 || true
+  cmd_up
+  for n in $nets; do
+    if docker network inspect "$n" >/dev/null 2>&1; then
+      cmd_attach "$n"
+    else
+      cmd_detach "$n"
+      info "forgot network $n (it no longer exists)"
+    fi
+  done
+}
+
+cmd_ports() {
+  [ $# -eq 2 ] || die "usage: dev-edge ports <http-port> <https-port>"
+  [[ $1 =~ ^[0-9]+$ && $2 =~ ^[0-9]+$ ]] || die "ports must be numbers"
+  cmd_init "$1" "$2"
+  if running; then cmd_restart; fi
+}
+
+cmd_port() {
+  load_config
+  case "${1:-https}" in
+    http) echo "$EDGE_HTTP_PORT" ;;
+    https) echo "$EDGE_HTTPS_PORT" ;;
+    *) die "usage: dev-edge port [http|https]" ;;
+  esac
+}
+
+port_suffix() {
+  load_config
+  [ "$EDGE_HTTPS_PORT" = "443" ] || printf ':%s' "$EDGE_HTTPS_PORT"
+}
+
+cmd_url() {
+  [ $# -ge 1 ] || die "usage: dev-edge url <host> [path]"
+  printf 'https://%s%s%s\n' "$1" "$(port_suffix)" "${2:-}"
+}
+
+cmd_cert() {
+  [ $# -ge 2 ] || die "usage: dev-edge cert <name> <domain>..."
+  need_mkcert
+  local name=$1; shift
+  [[ $name =~ ^[a-z0-9][a-z0-9._-]*$ ]] || die "cert name must be lowercase letters, digits, . _ -"
+  mkdir -p "$state/certs" "$state/dynamic"
+  local wanted current
+  wanted=$(printf '%s\n' "$@" | sort -u)
+  current=$(cat "$state/certs/$name.domains" 2>/dev/null || true)
+  if [ "$wanted" != "$current" ] || [ ! -f "$state/certs/$name.pem" ]; then
+    local out
+    out=$(mkcert -cert-file "$state/certs/$name.pem" -key-file "$state/certs/$name-key.pem" "$@" 2>&1) \
+      || { echo "$out" >&2; die "mkcert failed for: $*"; }
+    chmod 600 "$state/certs/$name-key.pem"
+    printf '%s\n' "$wanted" > "$state/certs/$name.domains"
+    write_tls_config "$name"
+    info "certificate '$name' issued for: $*"
+  fi
+  echo "$state/certs/$name.pem"
+}
+
+cmd_cert_rm() {
+  [ $# -eq 1 ] || die "usage: dev-edge cert-rm <name>"
+  rm -f "$state/certs/$1.pem" "$state/certs/$1-key.pem" "$state/certs/$1.domains" "$state/dynamic/tls-$1.yml"
+}
+
+cmd_attach() {
+  [ $# -eq 1 ] || die "usage: dev-edge attach <docker-network>"
+  docker network inspect "$1" >/dev/null 2>&1 || die "no docker network named '$1'"
+  cmd_up
+  if ! docker inspect -f '{{json .NetworkSettings.Networks}}' "$container" | grep -q "\"$1\""; then
+    docker network connect "$1" "$container"
+  fi
+  touch "$state/attached"
+  grep -qx "$1" "$state/attached" || echo "$1" >> "$state/attached"
+}
+
+cmd_detach() {
+  [ $# -eq 1 ] || die "usage: dev-edge detach <docker-network>"
+  docker network disconnect "$1" "$container" >/dev/null 2>&1 || true
+  if [ -f "$state/attached" ]; then
+    grep -vx "$1" "$state/attached" > "$state/attached.tmp" || true
+    mv "$state/attached.tmp" "$state/attached"
+  fi
+}
+
+cmd_status() {
+  load_config
+  if running; then
+    echo "dev-edge running: https on $EDGE_HTTPS_PORT, http on $EDGE_HTTP_PORT (redirects to https)"
+  else
+    echo "dev-edge stopped (ports: https $EDGE_HTTPS_PORT, http $EDGE_HTTP_PORT)"
+  fi
+  echo "dashboard: $(cmd_url traefik.localhost /dashboard/)"
+  echo "networks:"
+  if running; then
+    docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}' "$container" | sed '/^$/d; /^dev-edge_default$/d; s/^/  /'
+  fi
+  echo "certificates:"
+  for d in "$state"/certs/*.domains; do
+    [ -e "$d" ] || continue
+    printf '  %-28s %s\n' "$(basename "$d" .domains)" "$(tr '\n' ' ' < "$d")"
+  done
+}
+
+cmd_doctor() {
+  local ok=true
+  check() { if eval "$2"; then echo "  ok    $1"; else echo "  FAIL  $1${3:+  ($3)}"; ok=false; fi; }
+  load_config
+  echo "dev-edge doctor"
+  check "docker reachable" "docker info >/dev/null 2>&1" "start Docker"
+  check "docker compose v2" "docker compose version >/dev/null 2>&1" "install the Docker Compose plugin"
+  check "mkcert installed" "command -v mkcert >/dev/null" "macOS: brew install mkcert nss; Linux: see README"
+  check "mkcert CA trusted" "ca_trusted" "dev-edge init"
+  check "config present" "[ -f '$config' ]" "dev-edge init"
+  if running; then
+    check "edge running" "true"
+    check "edge answers with a trusted certificate" \
+      "curl -fsS -o /dev/null --max-time 5 '$(cmd_url traefik.localhost /dashboard/)' 2>/dev/null" \
+      "is the CA in the system trust store? see docs/troubleshooting.md"
+  else
+    check "https port $EDGE_HTTPS_PORT free" "! port_in_use $EDGE_HTTPS_PORT" "dev-edge ports <http> <https>"
+    check "http port $EDGE_HTTP_PORT free" "! port_in_use $EDGE_HTTP_PORT" "dev-edge ports <http> <https>"
+  fi
+  check "*.localhost resolves to loopback" "python3 -c 'import socket,sys; sys.exit(0 if socket.getaddrinfo(\"probe.dev-edge.localhost\", None)[0][4][0] in (\"127.0.0.1\",\"::1\") else 1)' 2>/dev/null" "see README: name resolution"
+  $ok
+}
+
+cmd_install() {
+  local dir=${1:-$HOME/.local/bin}
+  mkdir -p "$dir"
+  ln -sf "$repo/bin/dev-edge" "$dir/dev-edge"
+  info "linked $dir/dev-edge"
+  case ":$PATH:" in *":$dir:"*) ;; *) info "add $dir to your PATH" ;; esac
+}
+
+cmd_uninstall() {
+  local link=${1:-$HOME/.local/bin}/dev-edge
+  if running; then compose down; fi
+  if [ -L "$link" ] && [ "$(readlink "$link")" = "$repo/bin/dev-edge" ]; then
+    rm "$link"
+    info "removed $link"
+  fi
+  info "kept your config and certificates; delete them with: rm -rf '$state'"
+  info "to stop trusting the local CA (also used by any other mkcert user): mkcert -uninstall"
+}
+
+usage() {
+  cat <<EOF
+dev-edge: trusted local HTTPS for Docker projects on https://<name>.localhost
+
+Setup (once per machine)
+  init [http https]        create config, trust the mkcert CA, optionally set ports
+  install [dir]            symlink this CLI into dir (default ~/.local/bin)
+  uninstall [dir]          stop the edge and remove the symlink (keeps config and certificates)
+  doctor                   check the machine
+
+Edge
+  up | down | status       start / stop / show the shared Traefik
+  restart                  recreate the edge (after updating dev-edge) and re-attach networks
+  logs [docker logs args]  show the edge's logs, e.g. dev-edge logs -f
+  ports <http> <https>     change ports (default 80 443) and restart
+  port [http|https]        print a port
+  url <host> [path]        print the browser URL for a host (adds the port when not 443)
+
+Projects
+  cert <name> <domain>...  issue (or refresh when domains change) a trusted certificate,
+                           e.g. dev-edge cert myapp-main '*.main.myapp.localhost'
+  cert-rm <name>           delete a certificate
+  attach <network>         connect the edge to a project's Docker network (idempotent)
+  detach <network>         disconnect it (do this before removing the network)
+
+Other
+  home                     print where dev-edge is installed (its README lives there)
+  version                  print the version
+
+State: $state
+EOF
+}
+
+case "${1:-help}" in
+  init) shift; cmd_init "$@" ;;
+  up) cmd_up ;;
+  down) cmd_down ;;
+  restart) cmd_restart ;;
+  logs) shift; docker logs "$@" "$container" ;;
+  ports) shift; cmd_ports "$@" ;;
+  port) shift; cmd_port "$@" ;;
+  url) shift; cmd_url "$@" ;;
+  cert) shift; cmd_cert "$@" ;;
+  cert-rm) shift; cmd_cert_rm "$@" ;;
+  attach) shift; cmd_attach "$@" ;;
+  detach) shift; cmd_detach "$@" ;;
+  status) cmd_status ;;
+  doctor) cmd_doctor ;;
+  install) shift; cmd_install "$@" ;;
+  uninstall) shift; cmd_uninstall "$@" ;;
+  home) echo "$repo" ;;
+  version|-v|--version) echo "dev-edge $version" ;;
+  help|-h|--help) usage ;;
+  *) usage >&2; exit 2 ;;
+esac

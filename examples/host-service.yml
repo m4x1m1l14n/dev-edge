@@ -1,0 +1,19 @@
+# Route a process that runs on the host (not in Docker) through dev-edge, here a dev server on
+# port 5173 at https://vite.myapp.localhost.
+#
+#   cp examples/host-service.yml ~/.config/dev-edge/dynamic/myapp-host.yml   # edit names and port
+#   dev-edge cert myapp-host vite.myapp.localhost
+#
+# Traefik watches the folder, so the route works as soon as the file is saved. The process must
+# accept connections from the edge container: on Linux that means listening on 0.0.0.0, not
+# 127.0.0.1 (e.g. `vite --host`). Router and service names are global: keep them unique.
+http:
+  routers:
+    myapp-host-vite:
+      rule: Host(`vite.myapp.localhost`)
+      service: myapp-host-vite
+  services:
+    myapp-host-vite:
+      loadBalancer:
+        servers:
+          - url: http://host.docker.internal:5173
